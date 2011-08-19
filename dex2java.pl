@@ -4,6 +4,7 @@ use strict;
 use lib '/mnt/shared/projects/wii/wii/lib';
 use Binary;
 use Data::Dump::Streamer;
+use Scalar::Util 'looks_like_number';
 $|=1;
 
 # http://android.git.kernel.org/?p=platform/dalvik.git;a=blob_plain;f=docs/dex-format.html;hb=refs/heads/master
@@ -91,6 +92,30 @@ for my $infn (@ARGV) {
       print "  implements\n";
       print "   ", binary_name_to_pretty($_), "\n" for @{$class_def->{interfaces}};
     }
+    print "{\n";
+    my @static_values = @{$class_def->{static_values}};
+    for my $field (map {@$_}
+                   $class_def->{class_data}{static_fields},
+                   #$class_def->{class_data}{instance_fields}
+                  ) {
+      my $flags = join " ", grep {$_ ne '_raw'} keys %{$field->{access_flags}};
+      my $type = binary_name_to_pretty($field->{field}{type});
+      my $name = $field->{field}{name};
+      
+
+      if ($field->{access_flags}{static} and @static_values) {
+        my $val = shift @static_values;
+        # FIXME: This will fail when there is a static string that happens to consist of all digits?
+        if (!looks_like_number $val) {
+          $val = quotemeta($val);
+          $val = qq<"$val">;
+        }
+        print "  $flags $type $name = $val;\n";
+      } else {
+        print "  $flags $type $name;\n";
+      }
+    }
+    print "}\n";
     print "\n\n\n";
   }
 
@@ -99,6 +124,22 @@ for my $infn (@ARGV) {
 
 sub binary_name_to_pretty {
   local ($_) = @_;
+
+  my %cores = (
+               Z => 'boolean',
+               B => 'byte',
+               C => 'char',
+               D => 'double',
+               F => 'float',
+               I => 'int',
+               J => 'long',
+               S => 'short',
+               V => 'void',
+              );
+
+  if (exists $cores{$_}) {
+    return $cores{$_};
+  }
 
   if (m/^L(.*);/) {
     my $inner = $1;
@@ -281,9 +322,38 @@ sub eat_class_def_item {
                       return [] if !$loc;
                       Binary::eat_at(shift, $loc, \&eat_class_data_item);
                     },
-                    static_values_off => \&uint,
+                    static_values => sub {
+                      my $loc = uint($_[0]);
+                      return [] if !$loc;
+                      Binary::eat_at(shift, $loc, \&eat_encoded_array_item);
+                    },
                    ]
                   );
+}
+
+sub eat_encoded_array_item {
+  &eat_encoded_array
+}
+
+sub eat_encoded_array {
+  Binary::eat_counted(shift,
+                      \&uleb128,
+                      \&eat_encoded_value);
+}
+
+sub eat_encoded_value {
+  my $arg_and_type = ubyte($_[0]);
+  my $type = $arg_and_type & 0x1F;
+  my $arg = $arg_and_type >> 5;
+  my $len = $arg+1;
+
+  if ($type == 0x17 and $len == 1) {
+    return $by_index->{string_id_item}[ubyte($_[0])];
+  } elsif ($type == 0x04 and $len == 4) {
+    return uint($_[0]);
+  } else {
+    die "Don't know what to do with eat_encoded_value type=$type, arg=$arg";
+  }
 }
 
 sub eat_class_data_item {
@@ -294,14 +364,10 @@ sub eat_class_data_item {
                     direct_methods_size => \&uleb128,
                     virtual_methods_size => \&uleb128,
                     static_fields => sub {
-                      Binary::eat_counted($_[0], $_[0][1]{static_fields_size},
-                                          \&eat_encoded_field
-                                         );
+                      eat_encoded_field_list($_[0], $_[0][1]{static_fields_size});
                     },
                     instance_fields => sub {
-                      Binary::eat_counted($_[0], $_[0][1]{instance_fields_size},
-                                          \&eat_encoded_field
-                                         );
+                      eat_encoded_field_list($_[0], $_[0][1]{instance_fields_size});
                     },
                     direct_methods => sub {
                       Binary::eat_counted($_[0], $_[0][1]{direct_methods_size},
@@ -317,6 +383,23 @@ sub eat_class_data_item {
                   );
 }
 
+
+
+sub eat_encoded_field_list {
+  my ($context, $length) = @_;
+
+  my @a;
+  my $prev_idx = 0;
+  for my $i (0..$length-1) {
+    my $e = eat_encoded_field($_[0]);
+    push @a, $e;
+    $prev_idx += $e->{field_idx_diff};
+    $e->{field_idx} = $prev_idx;
+    $e->{field} = $by_index->{field_id_item}[$prev_idx];
+  }
+
+  return \@a;
+}
 
 sub eat_encoded_field {
   Binary::eat_desc(shift,
@@ -429,6 +512,10 @@ sub eat_encoded_type_addr_pair {
                     type => sub {$by_index->{type_id_item}[uleb128(shift)]},
                     addr => \&uleb128
                    ]);
+}
+
+sub ubyte {
+  Binary::eat_desc(shift, 'C');
 }
 
 sub ushort {
