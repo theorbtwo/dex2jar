@@ -93,6 +93,7 @@ for my $infn (@ARGV) {
       print "   ", binary_name_to_pretty($_), "\n" for @{$class_def->{interfaces}};
     }
     print "{\n";
+
     my @static_values = @{$class_def->{static_values}};
     for my $field (map {@$_}
                    $class_def->{class_data}{static_fields},
@@ -115,6 +116,15 @@ for my $infn (@ARGV) {
         print "  $flags $type $name;\n";
       }
     }
+
+
+    for my $method (map {@$_}
+                    $class_def->{class_data}{direct_methods},
+                    $class_def->{class_data}{virtual_methods}
+                   ) {
+
+    }
+    
     print "}\n";
     print "\n\n\n";
   }
@@ -370,20 +380,14 @@ sub eat_class_data_item {
                       eat_encoded_field_list($_[0], $_[0][1]{instance_fields_size});
                     },
                     direct_methods => sub {
-                      Binary::eat_counted($_[0], $_[0][1]{direct_methods_size},
-                                          \&eat_encoded_method
-                                         );
+                      eat_encoded_method_list($_[0], $_[0][1]{direct_methods_size});
                     },
                     virtual_methods => sub {
-                      Binary::eat_counted($_[0], $_[0][1]{virtual_methods_size},
-                                          \&eat_encoded_method
-                                         );
+                      eat_encoded_method_list($_[0], $_[0][1]{virtual_methods_size});
                     },
                    ]
                   );
 }
-
-
 
 sub eat_encoded_field_list {
   my ($context, $length) = @_;
@@ -409,12 +413,32 @@ sub eat_encoded_field {
                    ]);
 }
 
+sub eat_encoded_method_list {
+  my ($context, $length) = @_;
+
+  my @a;
+  my $prev_idx = 0;
+  for my $i (0..$length-1) {
+    my $e = eat_encoded_method($_[0]);
+    push @a, $e;
+    $prev_idx += $e->{method_idx_diff};
+    $e->{method_idx} = $prev_idx;
+    $e->{method} = $by_index->{method_id_item}[$prev_idx];
+  }
+
+  return \@a;
+}
+
 sub eat_encoded_method {
   Binary::eat_desc(shift,
                    [
                     method_idx_diff => \&uleb128,
                     access_flags => sub {Binary::eat_bitmask(shift, \&uleb128, @access_flags)},
-                    code_off => \&uleb128,
+                    code => sub {
+                      Binary::eat_at(shift,
+                                     \&uleb128,
+                                     \&eat_code_item);
+                    }
                    ]);
 }
 
@@ -443,7 +467,9 @@ sub eat_code_item {
                     outs_size => \&ushort,
                     # in *items*
                     tries_size => \&ushort,
-                    debug_info_off => \&uint,
+                    debug_info => sub {
+                      Binary::eat_at(shift, \&uint, \&eat_debug_info_item);
+                    },
 
                     insns => sub {
                       Binary::eat_counted(shift, \&uint, \&ushort);
@@ -482,6 +508,98 @@ sub eat_code_item {
                                          );
                     },
                    ]);
+}
+
+sub eat_debug_info_item {
+  my $head = Binary::eat_desc($_[0],
+                              [
+                               line_start => \&uleb128,
+                               parameter_names => sub {
+                                 Binary::eat_counted(shift,
+                                                     \&uleb128,
+                                                     sub {
+                                                       my $index = uleb128p1(shift);
+                                                       if ($index == -1) {
+                                                         return undef;
+                                                       }
+                                                       return $by_index->{string_id_item}[$index];
+                                                     });
+                               }
+                              ]);
+
+  my $address = 0;
+  my $line = $head->{line_start};
+  my $source_file = 'fixme_context';
+  my $prologue_end;
+  my $epilogue_begin;
+  my @registers;
+  my @dead_registers;
+
+  my @entries;
+
+  while (my $bytecode = ubyte($_[0])) {
+    if ($bytecode == 1) {
+      # DBG_ADVANCE_PC
+      $address += uleb128($_[0]);
+    } elsif ($bytecode == 2) {
+      # DBG_ADVANCE_LINE
+      $line += uleb128($_[0]);
+    } elsif ($bytecode == 3) {
+      # DBG_START_LOCAL
+      my $register_num = uleb128($_[0]);
+      my $name = $by_index->{string_id_item}[uleb128p1($_[0])];
+      my $type = $by_index->{type_id_item}[uleb128p1($_[0])];
+
+      $registers[$register_num] = {name => $name, type => $type};
+    } elsif ($bytecode == 4) {
+      # DBG_START_LOCAL_EXTENDED
+      my $register_num = uleb128($_[0]);
+      my $name = $by_index->{string_id_item}[uleb128p1($_[0])];
+      my $type = $by_index->{type_id_item}[uleb128p1($_[0])];
+      my $sig = $by_index->{string_id_item}[uleb128p1($_[0])];
+
+      $registers[$register_num] = {name => $name, type => $type, sig => $sig};
+      
+    } elsif ($bytecode == 5) {
+      # DBG_END_LOCAL
+      my $register_num = uleb128($_[0]);
+
+      $dead_registers[$register_num] = $registers[$register_num];
+      $registers[$register_num] = undef;
+
+    } elsif ($bytecode == 6) {
+      # DBG_RESTART_LOCAL
+      # docs seem to say that this is a new local with the same name & type as the old one
+      my $register_num = uleb128($_[0]);
+      
+      $registers[$register_num] = $dead_registers[$register_num];
+      $dead_registers[$register_num] = undef;
+
+    } elsif ($bytecode == 7) {
+      # DBG_SET_PROLOGUE_END
+      $prologue_end=1;
+    } elsif ($bytecode >= 0x0a) {
+      # "special" opcodes
+      my $adjusted_opcode = $bytecode-0x0a;
+      $line += ($adjusted_opcode % 15) - 4;
+      $address += int($adjusted_opcode / 15);
+      
+      # Copy!
+      my $registers = [@registers];
+
+      push @entries, {address => $address, line => $line, source_file => $source_file, prologue_end => $prologue_end, epilogue_begin => $epilogue_begin, registers => $registers};
+      
+      $prologue_end = 0;
+      $epilogue_begin = 0;
+
+    } else {
+      Dump \@entries;
+      die "FIXME: Unhandled debug state machine opcode $bytecode";
+    }
+  }
+
+  $head->{entries} = \@entries;
+  return $head;
 }
 
 sub eat_encoded_catch_handler {
@@ -547,6 +665,10 @@ sub leb128_core {
 sub uleb128 {
   my ($v, $len) = leb128_core(shift);
   return $v;
+}
+
+sub uleb128p1 {
+  uleb128(shift)-1;
 }
 
 sub sleb128 {
