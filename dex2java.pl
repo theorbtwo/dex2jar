@@ -169,6 +169,8 @@ for my $infn (@ARGV) {
                               0x01 => ['12x', 'move'],
                               0x02 => ['22x', 'move'],
                               0x03 => ['32x', 'move'],
+                              0x04 => ['12x', 'move-wide'],
+                              0x05 => ['22x', 'move-wide'],
                               0x07 => ['12x', 'move-object'],
                               0x0a => ['11x', 'move-result'],
                               0x0b => ['11x', 'move-result-wide'],
@@ -181,6 +183,8 @@ for my $infn (@ARGV) {
                               0x11 => ['11x', 'return-object'],
                               0x12 => ['11n', 'const/4 vA, #+B'],
                               0x1a => ['21c', 'const-string'],
+                              0x1f => ['21c', 'check-cast'],
+                              0x20 => ['22c', 'instance-of'],
 
                               0x21 => ['12x', 'array-length'],
                               0x22 => ['21c', 'new-instance'],
@@ -278,7 +282,6 @@ for my $infn (@ARGV) {
 
         my $data;
 
-
         # http://android.git.kernel.org/?p=platform/dalvik.git;a=blob_plain;f=docs/instruction-formats.html;hb=refs/heads/master
         given ($op_info->[0]) {
           when ('10t') {
@@ -339,6 +342,11 @@ for my $infn (@ARGV) {
             $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
             $data->{c} = 'loc_'.($address+(unpack 's', pack 'S', shift(@insns)));
           }
+          when ('22x') {
+            # AA|op BBBB - op vAA, vBBBB
+            $data->{a} = reg_name($opcode >> 8, $current_debug);
+            $data->{b} = reg_name(shift @insns, $current_debug);
+          }
           when ('23x') {
             # AA|op CC|BB - op vAA, vBB, vCC
             $data->{a} = reg_name($opcode >> 8, $current_debug);
@@ -379,6 +387,11 @@ for my $infn (@ARGV) {
             print "    // nop\n";
           }
 
+          when ('move-wide') {
+            # 4-6
+            print "    $a = $b; // wide\n";
+          }
+
           when ('move-object') {
             # 7
             print "  $a = $b; // objects\n";
@@ -387,6 +400,13 @@ for my $infn (@ARGV) {
           when ('return-object') {
             # 11
             print "    return $a; // object\n";
+          }
+
+          when ('check-cast') {
+            # 1f
+            my $type = binary_name_to_pretty($by_index->{type_id_item}[$b]);
+
+            print "    check-cast $a, $type;\n";
           }
 
           when ('throw') {
@@ -422,14 +442,14 @@ for my $infn (@ARGV) {
             print "    $a = $b + $c;\n";
           }
           when ('array-length') {
-            my $dest = $data->{a};
-            my $array = $data->{b};
+            my $dest = $a;
+            my $array = $b;
             print "    $dest = $array.length;\n";
           }
           when ('aput-object') {
-            my $src = $data->{a};
-            my $array = $data->{b};
-            my $i = $data->{c};
+            my $src = $a;
+            my $array = $b;
+            my $i = $c;
 
             print "    $array\[$i] = $src;\n";
           }
