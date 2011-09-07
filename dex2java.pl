@@ -182,6 +182,8 @@ for my $infn (@ARGV) {
                               0x28 => ['10t', 'goto'],
                               0x29 => ['20t', 'goto'],
 
+                              0x2b => ['31t', 'packed-switch'],
+
                               0x32 => ['22t', 'if-eq'],
                               0x33 => ['22t', 'if-ne'],
                               0x34 => ['22t', 'if-lt'],
@@ -336,6 +338,15 @@ for my $infn (@ARGV) {
             $data->{c} = reg_name($next >> 8, $current_debug);
             $data->{b} = reg_name($next & 0xFF, $current_debug);
           }
+
+          when ('31t') {
+            # AA|op BBBBlo BBBBhi -- op vAA, +BBBBBBBB
+            # However, this is only used for the special instructions
+            #  -- packed-switch, sparse-switch, fill-array-data
+            $data->{a} = reg_name($opcode >> 8, $current_debug);
+            $data->{b} = (shift @insns) | ((shift @insns) >> 16);
+          }
+
           when ('35c') {
             # B|A|op CCCC G|F|E|D -- op {vD, vE, vF, vG, vA}, kind@CCCC
             $data->{b} = $opcode >> (8+4);
@@ -359,6 +370,23 @@ for my $infn (@ARGV) {
             # 7
             print "  $a = $b; // objects\n";
           }
+
+          when ('packed-switch') {
+            print "Given $a...\n";
+            # 2b
+            my $offset = $b-3;
+            die "packed-switch doesn't point to ident?"
+              if $insns[$offset++] != 0x0100;
+            my $size = $insns[$offset++];
+            #print "Size: $size\n";
+            my $start = $insns[$offset++] | ($insns[$offset++]<<16);
+            #print "Start: $start\n";
+            for ($start..$start+$size-1) {
+              my $loc = $insns[$offset++] | ($insns[$offset++]<<16);
+              print "$_: $loc\n";
+            }
+          }
+
           when ('iget-object') {
             my $field = $by_index->{field_id_item}[$c]->{name};
             print "   $a = $b.$field; // object field\n";
