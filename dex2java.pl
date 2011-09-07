@@ -5,9 +5,10 @@ use lib '/mnt/shared/projects/wii/wii/lib';
 use Binary;
 use Data::Dump::Streamer;
 use Scalar::Util 'looks_like_number';
+use 5.10.0;
 $|=1;
 
-# http://android.git.kernel.org/?p=platform/dalvik.git;a=blob_plain;f=docs/dex-format.html;hb=refs/heads/master
+# http://source.android.com/tech/dalvik/dex-format.html
 
 my $by_index = {};
 my $by_offset = {};
@@ -83,13 +84,16 @@ for my $infn (@ARGV) {
 
   for my $class_def (@{$by_index->{class_def_item}}) {
     local $class_def->{_context} = 'hidden';
-    Dump $class_def;
+    #Dump $class_def;
 
-    print "$_ " for grep {$_ ne '_raw'} keys %{$class_def->{access_flags}};
+    print "// GENERATED OUTPUT\n";
+
+    print join(" ", grep {$_ ne '_raw'} keys %{$class_def->{access_flags}});
+    print " class ";
     print binary_name_to_pretty($class_def->{class});
-    print " : ", binary_name_to_pretty($class_def->{superclass}), "\n";
+    print "\n  extends ", binary_name_to_pretty($class_def->{superclass}), "\n";
     if (@{$class_def->{interfaces}}) {
-      print "  implements\n";
+      print "\n  implements\n";
       print "   ", binary_name_to_pretty($_), "\n" for @{$class_def->{interfaces}};
     }
     print "{\n";
@@ -122,7 +126,379 @@ for my $infn (@ARGV) {
                     $class_def->{class_data}{direct_methods},
                     $class_def->{class_data}{virtual_methods}
                    ) {
+      my $flags = $method->{access_flags};
+      my $flags_str = join " ", grep {!$_ ~~ ['_raw', 'constructor']} keys %$flags;
 
+      my $ret = binary_name_to_pretty($method->{method}{proto}{return_type});
+      my $name = $method->{method}{name};
+      
+      $flags_str .= " " if $flags_str;
+      print "  $flags_str$ret $name (\n";
+      for my $i (0..@{$method->{method}{proto}{parameters}}-1) {
+        my $name = $method->{code}{debug_info}{parameter_names}[$i] // "argument_$i";
+        my $type = binary_name_to_pretty($method->{method}{proto}{parameters}[$i]);
+        
+        print "    $type $name,\n";
+      }
+      print "  ) {\n";
+
+      my @insns = @{$method->{code}{insns}};
+      my @debug_entries = @{$method->{code}{debug_info}{entries}};
+      my $orig_len = @insns;
+      my $current_debug;
+      
+      while (@insns) {
+        my $address = $orig_len - @insns;
+
+        print "loc_$address:\n";
+
+        while (@debug_entries and $debug_entries[0]{address} <= $address) {
+          $current_debug = shift @debug_entries;
+
+          print "// $current_debug->{source_file} line $current_debug->{line}\n";
+          print "// prologue ends here\n" if $current_debug->{prologue_end};
+          print "// epilogue begins here\n" if $current_debug->{epilogue_begin};
+        }
+
+        my $opcode = shift @insns;
+
+        # http://android.git.kernel.org/?p=platform/dalvik.git;a=blob_plain;f=docs/dalvik-bytecode.html;hb=refs/heads/master
+
+        state $all_op_info = {
+                              0x0a => ['11x', 'move-result'],
+                              0x0c => ['11x', 'move-result-object'],
+                              0x0d => ['11x', 'move-exception'],
+                              0x0e => ['10x', 'return-void'],
+
+                              0x12 => ['11n', 'const/4 vA, #+B'],
+                              0x1a => ['21c', 'const-string'],
+
+                              0x21 => ['12x', 'array-length'],
+                              0x22 => ['21c', 'new-instance'],
+                              0x23 => ['22c', 'new-array'],
+
+                              0x28 => ['10t', 'goto'],
+                              0x29 => ['20t', 'goto'],
+
+                              0x32 => ['22t', 'if-eq'],
+                              0x33 => ['22t', 'if-ne'],
+                              0x34 => ['22t', 'if-lt'],
+                              0x35 => ['22t', 'if-ge'],
+                              0x36 => ['22t', 'if-gt'],
+                              0x37 => ['22t', 'if-le'],
+
+                              0x38 => ['21t', 'if-eqz'],
+                              0x39 => ['21t', 'if-nez'],
+                              0x3a => ['21t', 'if-ltz'],
+                              0x3b => ['21t', 'if-gez'],
+                              0x3c => ['21t', 'if-gtz'],
+                              0x3d => ['21t', 'if-lez'],
+
+                              0x44 => ['23x', 'aget'],
+                              0x45 => ['23x', 'aget-wide'],
+                              0x46 => ['23x', 'aget-object'],
+                              0x47 => ['23x', 'aget-boolean'],
+                              0x48 => ['23x', 'aget-byte'],
+                              0x49 => ['23x', 'aget-char'],
+                              0x4a => ['23x', 'aget-short'],
+                              0x4b => ['23x', 'aput'],
+                              0x4c => ['23x', 'aput-wide'],
+                              0x4d => ['23x', 'aput-object'],
+                              0x4e => ['23x', 'aput-boolean'],
+                              0x4f => ['23x', 'aget-byte'],
+                              0x50 => ['23x', 'aget-char'],
+                              0x51 => ['23x', 'aget-short'],
+
+                              0x52 => ['22c', 'iget'],
+                              0x53 => ['22c', 'iget-wide'],
+                              0x54 => ['22c', 'iget-object'],
+                              0x55 => ['22c', 'iget-boolean'],
+                              0x56 => ['22c', 'iget-byte'],
+                              0x57 => ['22c', 'iget-char'],
+                              0x58 => ['22c', 'iget-short'],
+                              0x59 => ['22c', 'iput'],
+                              0x5a => ['22c', 'iput-wide'],
+                              0x5b => ['22c', 'iput-object'],
+                              0x5c => ['22c', 'iput-boolean'],
+                              0x5d => ['22c', 'iput-byte'],
+                              0x5e => ['22c', 'iput-char'],
+                              0x5f => ['22c', 'iput-short'],
+
+
+                              0x60 => ['21c', 'sget'],
+                              0x61 => ['21c', 'sget-wide'],
+                              0x62 => ['21c', 'sget-object'],
+                              0x63 => ['21c', 'sget-boolean'],
+                              0x64 => ['21c', 'sget-byte'],
+                              0x65 => ['21c', 'sget-char'],
+                              0x66 => ['21c', 'sget-short'],
+                              0x67 => ['21c', 'sput'],
+                              0x68 => ['21c', 'sput-wide'],
+                              0x69 => ['21c', 'sput-object'],
+                              0x6a => ['21c', 'sput-boolean'],
+                              0x6b => ['21c', 'sput-byte'],
+                              0x6c => ['21c', 'sput-char'],
+                              0x6d => ['21c', 'sput-short'],
+
+                              0x6e => ['35c', 'invoke-virtual'],
+                              0x6f => ['35c', 'invoke-super'],
+                              0x70 => ['35c', 'invoke-direct'],
+                              0x71 => ['35c', 'invoke-static'],
+                              0x72 => ['35c', 'invoke-interface'],
+
+                              0xd8 => ['22b', 'add-int'],
+                              0xd9 => ['22b', 'rsub-int'],
+                              0xda => ['22b', 'mul-int'],
+                              0xdb => ['22b', 'div-int'],
+                              0xdc => ['22b', 'rem-int'],
+                              0xdd => ['22b', 'and-int'],
+                              0xde => ['22b', 'or-int'],
+                              0xdf => ['22b', 'xor-int'],
+                              0xe0 => ['22b', 'shl-int'],
+                              0xe1 => ['22b', 'shr-int'],
+                              0xe2 => ['22b', 'ushr-int'],
+                             };
+
+        my $op_info = $all_op_info->{$opcode & 0xFF};
+        if (!$op_info) {
+          die sprintf "Unknown opcode 0x%02x", $opcode & 0xFF;
+        }
+
+        my $data;
+
+
+        # http://android.git.kernel.org/?p=platform/dalvik.git;a=blob_plain;f=docs/instruction-formats.html;hb=refs/heads/master
+        given ($op_info->[0]) {
+          when ('10t') {
+            # AA|op -- op +AA
+            $data->{a} = 'loc_'.($address + unpack 'c', pack 'C', $opcode>>8);
+          }
+
+          when ('10x') {
+            # nop.
+          }
+
+          when ('11n') {
+            # B|A|op -- op vA, #+B
+            $data->{a} = 'v'.(($opcode >> 8)&0xF);
+            $data->{b} = $opcode >> 12;
+          }
+
+          when ('11x') {
+            $data->{a} = 'v'.($opcode >> 8);
+          }
+
+          when ('12x') {
+            # B|A|op -- op vA, vB
+            $data->{a} = 'v'.(($opcode >> 8)&0xF);
+            $data->{b} = 'v'.($opcode >> 12);
+          }
+
+          when ('20t') {
+            # ØØ|op AAAA -- op +AAAA
+            $data->{a} = 'loc_'.($address+unpack 's', pack 'S', shift(@insns));
+          }
+          when ('21c') {
+            # AA|op BBBB -- op vAA, xxxx@BBBB
+            $data->{a} = 'v'.($opcode >> 8);
+            $data->{b} = shift @insns;
+          }
+          when('21t') {
+            # AA|op BBBB -- op vAA, +BBBB
+            $data->{a} = 'v'.($opcode >> 8);
+            $data->{b} = 'loc_'.($address+unpack 's', pack 'S', shift(@insns));
+          }
+          when ('22b') {
+            # AA|op CC|BB -- op vAA, vBB, #+CC
+            $data->{a} = 'v'.($opcode >> 8);
+            my $next = shift @insns;
+            $data->{c} = $next >> 8;
+            $data->{b} = 'v'.($next & 0xFF);
+          }
+          when ('22c') {
+            # B|A|op CCCC-- op vA, vB, kind@CCCC
+            $data->{b} = 'v'.($opcode >> 12);
+            $data->{a} = 'v'.(($opcode >> 8) & 0xF);
+            $data->{c} = shift @insns;
+          }
+          when ('22t') {
+            # B|A|op CCCC - op vA, vB, +CCCC
+            $data->{b} = 'v'.($opcode >> 12);
+            $data->{a} = 'v'.(($opcode >> 8) & 0xF);
+            $data->{c} = 'loc_'.($address+(unpack 's', pack 'S', shift(@insns)));
+          }
+          when ('23x') {
+            # AA|op CC|BB - op vAA, vBB, vCC
+            $data->{a} = 'v'.($opcode >> 8);
+            my $next = shift @insns;
+            $data->{c} = 'v'.($next >> 8);
+            $data->{b} = 'v'.($next & 0xFF);
+          }
+          when ('35c') {
+            # B|A|op CCCC G|F|E|D -- op {vD, vE, vF, vG, vA}, kind@CCCC
+            $data->{b} = ($opcode >> (8+4));
+            $data->{a} = 'v'.(($opcode >> 8) & 0xF);
+            $data->{c} = shift @insns;
+            my $gfed = shift @insns;
+            $data->{g} = 'v'.(($gfed >> 12) & 0xF);
+            $data->{f} = 'v'.(($gfed >>  8) & 0xF);
+            $data->{e} = 'v'.(($gfed >>  4) & 0xF);
+            $data->{d} = 'v'.(($gfed >>  0) & 0xF);
+          }
+          default {
+            die "Unknown opcode format $_";
+          }
+        }
+
+
+        my ($a, $b, $c) = @{$data}{qw<a b c>};
+        given ($op_info->[1]) {
+          when ('iget-object') {
+            my $field = $by_index->{field_id_item}[$c]->{name};
+            print "   $a = $b.$field; // object field\n";
+          }
+          when ('iput-object') {
+            my $field = $by_index->{field_id_item}[$c]->{name};
+            print "   $b.$field = $a; // object field\n";
+          }
+          when ('add-int') {
+            print "    $a = $b + $c;\n";
+          }
+          when ('array-length') {
+            my $dest = $data->{a};
+            my $array = $data->{b};
+            print "    $dest = $array.length;\n";
+          }
+          when ('aput-object') {
+            my $src = $data->{a};
+            my $array = $data->{b};
+            my $i = $data->{c};
+
+            print "    $array\[$i] = $src;\n";
+          }
+          when ('aget-object') {
+            my $dest = $data->{a};
+            my $array = $data->{b};
+            my $i = $data->{c};
+
+            print "    $dest = $array\[$i];\n";
+          }
+          when ('goto') {
+            my $dest = $data->{a};
+            print "    goto $dest;\n";
+          }
+          when ('if-eq') {
+            my ($a) = $data->{a};
+            my ($b) = $data->{b};
+            my $dest = $data->{c};
+            print "    if ($a == $b) goto $dest;\n";
+          }
+          when ('if-ne') {
+            my ($a) = $data->{a};
+            my ($b) = $data->{b};
+            my $dest = $data->{c};
+            print "    if ($a != $b) goto $dest;\n";
+          }
+          when ('if-ge') {
+            my ($a) = $data->{a};
+            my ($b) = $data->{b};
+            my $dest = $data->{c};
+            print "    if ($a >= $b) goto $dest;\n";
+          }
+          when ('if-eqz') {
+            my $reg = $data->{a};
+            my $targ = $data->{b};
+            
+            # FIXME: Java has no goto statement!
+            print "    if ($reg == 0) goto $targ;\n";
+          }
+          when (['move-result', 'move-result-object']) {
+            my $reg = $data->{a};
+            print "   $reg = ret;\n";
+          }
+          when ('move-exception') {
+            print "   $a = caught;\n";
+          }
+          when ('const/4 vA, #+B') {
+            my $reg = $data->{a};
+            my $val = $data->{b};
+            print "    $reg = $val;\n";
+          }
+          when('const-string') {
+            my $reg = $data->{a};
+            my $val = quotemeta($by_index->{string_id_item}[$data->{b}]);
+            
+            print "    $reg = \"$val\";\n";
+          }
+          when ('return-void') {
+            print "    return;\n";
+          }
+          when ('sput-object') {
+            my $field = $by_index->{field_id_item}[$data->{b}];
+            my $field_name = $field->{name};
+            my $reg = $data->{a};
+
+            print "    this.$field_name = $reg;\n";
+          }
+          when ('sget-object') {
+            my $field = $by_index->{field_id_item}[$data->{b}];
+            my $field_name = $field->{name};
+            my $reg = $data->{a};
+
+            print "    $reg = this.$field_name;\n";
+          }
+          when ('invoke-direct') {
+            my $meth = $by_index->{method_id_item}[$data->{c}];
+            my $meth_name = $meth->{name};
+
+            if ($meth_name eq '<init>') {
+              # is a constructor
+              $meth_name = "$a = new ".binary_name_to_pretty($meth->{class});
+            } else {
+              die;
+            }
+
+            # This is decidedly confusing...
+            my @args = (@{$data}{qw<d e f g a>})[2..$data->{b}];
+
+            print "    $meth_name(", join(", ", @args), ");\n";
+          }
+          when (['invoke-interface', 'invoke-virtual', 'invoke-static']) {
+            my $meth = $by_index->{method_id_item}[$data->{c}];
+            my $meth_name = $meth->{name};
+            my $object = $data->{d};
+            my $arg_count = $data->{b}-1;
+
+            my @args = (@{$data}{qw<e f g>})[0..$arg_count-1];
+            my $args = join ", ", @args;
+
+            my $opname = $op_info->[1];
+            print "   ret = $object.$meth_name($args); // $opname\n";
+          }
+          when ('new-instance') {
+            my $reg = $data->{a};
+            my $type = binary_name_to_pretty($by_index->{type_id_item}[$data->{b}]);
+
+            print "    // new-instance $type in $reg\n";
+          }
+          when ('new-array') {
+            my $ret = $data->{a};
+            my $size = $data->{b};
+            my $type = binary_name_to_pretty($by_index->{type_id_item}[$data->{c}]);
+            # The name of an array type ends in '[]'.  Take them off
+            # so we can add on a *filled* pair of []s.
+            $type =~ s/\[\]$//;
+
+            print "    $ret = new $type\[$size\]();\n";
+          }
+          default {
+            Dump $data;
+            die "Unknown opcode $_";
+          }
+        }
+      }
+
+      print "  }\n\n";
     }
     
     print "}\n";
@@ -151,7 +527,9 @@ sub binary_name_to_pretty {
     return $cores{$_};
   }
 
-  if (m/^L(.*);/) {
+  if (s/^\[//) {
+    return binary_name_to_pretty($_).'[]';
+  } elsif (m/^L(.*);/) {
     my $inner = $1;
     $inner =~ s!/!.!g;
     return "$inner";
@@ -194,8 +572,8 @@ sub eat_map_item {
                       Binary::eat_at(shift,
                                      $context->{offset},
                                      sub {
-                                       my ($std) = @_;
-
+                                       my ($conv) = @_;
+                                       my ($fh, $context, $address) = @$conv;
 
                                        my @array;
                                        my $eater = main->can("eat_".$context->{type});
@@ -204,7 +582,7 @@ sub eat_map_item {
                                          return;
                                        }
                                        for my $i (0..$context->{size}-1) {
-                                         my $e = $eater->($std);
+                                         my $e = $eater->([$fh, $context, $address.'.'.$i]);
                                          if (ref $e eq 'HASH') {
                                            delete $e->{_context};
                                          }
@@ -359,6 +737,8 @@ sub eat_encoded_value {
 
   if ($type == 0x17 and $len == 1) {
     return $by_index->{string_id_item}[ubyte($_[0])];
+  } elsif ($type == 0x17 and $len == 2) {
+    return $by_index->{string_id_item}[ushort($_[0])];
   } elsif ($type == 0x04 and $len == 4) {
     return uint($_[0]);
   } else {
@@ -578,6 +958,20 @@ sub eat_debug_info_item {
     } elsif ($bytecode == 7) {
       # DBG_SET_PROLOGUE_END
       $prologue_end=1;
+
+    } elsif ($bytecode == 8) {
+      # DBG_SET_EPILOGUE_BEGIN
+      $epilogue_begin=1;
+
+    } elsif ($bytecode == 9) {
+      # DBG_SET_FILE
+      my $index = uleb128p1($_[0]);
+      if ($index == -1) {
+        $source_file = '(unavailable)';
+      } else {
+        $source_file = $by_index->{string_id_item}[$index];
+      }
+
     } elsif ($bytecode >= 0x0a) {
       # "special" opcodes
       my $adjusted_opcode = $bytecode-0x0a;
