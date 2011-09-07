@@ -417,6 +417,13 @@ for my $infn (@ARGV) {
             # FIXME: Java has no goto statement!
             print "    if ($reg == 0) goto $targ;\n";
           }
+          when ('if-lez') {
+            my $reg = $data->{a};
+            my $targ = $data->{b};
+            
+            # FIXME: Java has no goto statement!
+            print "    if ($reg <= 0) goto $targ;\n";
+          }
           when (['move-result', 'move-result-object']) {
             my $reg = $data->{a};
             print "   $reg = ret;\n";
