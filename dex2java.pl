@@ -170,6 +170,7 @@ for my $infn (@ARGV) {
                               0x0c => ['11x', 'move-result-object'],
                               0x0d => ['11x', 'move-exception'],
                               0x0e => ['10x', 'return-void'],
+                              0x0f => ['11x', 'return'],
 
                               0x12 => ['11n', 'const/4 vA, #+B'],
                               0x1a => ['21c', 'const-string'],
@@ -444,6 +445,9 @@ for my $infn (@ARGV) {
           }
           when ('return-void') {
             print "    return;\n";
+          }
+          when ('return') {
+            print "    return $a;\n";
           }
           when ('sput-object') {
             my $field = $by_index->{field_id_item}[$data->{b}];
