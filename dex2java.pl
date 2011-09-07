@@ -280,18 +280,18 @@ for my $infn (@ARGV) {
 
           when ('11n') {
             # B|A|op -- op vA, #+B
-            $data->{a} = 'v'.(($opcode >> 8)&0xF);
+            $data->{a} = reg_name(($opcode >> 8)&0xF, $current_debug);
             $data->{b} = $opcode >> 12;
           }
 
           when ('11x') {
-            $data->{a} = 'v'.($opcode >> 8);
+            $data->{a} = reg_name($opcode >> 8, $current_debug);
           }
 
           when ('12x') {
             # B|A|op -- op vA, vB
-            $data->{a} = 'v'.(($opcode >> 8)&0xF);
-            $data->{b} = 'v'.($opcode >> 12);
+            $data->{a} = reg_name(($opcode >> 8)&0xF, $current_debug);
+            $data->{b} = reg_name($opcode >> 12, $current_debug);
           }
 
           when ('20t') {
@@ -300,50 +300,50 @@ for my $infn (@ARGV) {
           }
           when ('21c') {
             # AA|op BBBB -- op vAA, xxxx@BBBB
-            $data->{a} = 'v'.($opcode >> 8);
+            $data->{a} = reg_name($opcode >> 8, $current_debug);
             $data->{b} = shift @insns;
           }
           when('21t') {
             # AA|op BBBB -- op vAA, +BBBB
-            $data->{a} = 'v'.($opcode >> 8);
+            $data->{a} = reg_name($opcode >> 8, $current_debug);
             $data->{b} = 'loc_'.($address+unpack 's', pack 'S', shift(@insns));
           }
           when ('22b') {
             # AA|op CC|BB -- op vAA, vBB, #+CC
-            $data->{a} = 'v'.($opcode >> 8);
+            $data->{a} = reg_name($opcode >> 8, $current_debug);
             my $next = shift @insns;
             $data->{c} = $next >> 8;
-            $data->{b} = 'v'.($next & 0xFF);
+            $data->{b} = reg_name($next & 0xFF, $current_debug);
           }
           when ('22c') {
             # B|A|op CCCC-- op vA, vB, kind@CCCC
-            $data->{b} = 'v'.($opcode >> 12);
-            $data->{a} = 'v'.(($opcode >> 8) & 0xF);
+            $data->{b} = reg_name($opcode >> 12, $current_debug);
+            $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
             $data->{c} = shift @insns;
           }
           when ('22t') {
             # B|A|op CCCC - op vA, vB, +CCCC
-            $data->{b} = 'v'.($opcode >> 12);
-            $data->{a} = 'v'.(($opcode >> 8) & 0xF);
+            $data->{b} = reg_name($opcode >> 12, $current_debug);
+            $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
             $data->{c} = 'loc_'.($address+(unpack 's', pack 'S', shift(@insns)));
           }
           when ('23x') {
             # AA|op CC|BB - op vAA, vBB, vCC
-            $data->{a} = 'v'.($opcode >> 8);
+            $data->{a} = reg_name($opcode >> 8, $current_debug);
             my $next = shift @insns;
-            $data->{c} = 'v'.($next >> 8);
-            $data->{b} = 'v'.($next & 0xFF);
+            $data->{c} = reg_name($next >> 8, $current_debug);
+            $data->{b} = reg_name($next & 0xFF, $current_debug);
           }
           when ('35c') {
             # B|A|op CCCC G|F|E|D -- op {vD, vE, vF, vG, vA}, kind@CCCC
-            $data->{b} = ($opcode >> (8+4));
-            $data->{a} = 'v'.(($opcode >> 8) & 0xF);
+            $data->{b} = $opcode >> (8+4);
+            $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
             $data->{c} = shift @insns;
             my $gfed = shift @insns;
-            $data->{g} = 'v'.(($gfed >> 12) & 0xF);
-            $data->{f} = 'v'.(($gfed >>  8) & 0xF);
-            $data->{e} = 'v'.(($gfed >>  4) & 0xF);
-            $data->{d} = 'v'.(($gfed >>  0) & 0xF);
+            $data->{g} = reg_name(($gfed >> 12) & 0xF, $current_debug);
+            $data->{f} = reg_name(($gfed >>  8) & 0xF, $current_debug);
+            $data->{e} = reg_name(($gfed >>  4) & 0xF, $current_debug);
+            $data->{d} = reg_name(($gfed >>  0) & 0xF, $current_debug);
           }
           default {
             die "Unknown opcode format $_";
@@ -448,7 +448,7 @@ for my $infn (@ARGV) {
             print "    $reg = this.$field_name;\n";
           }
           when ('invoke-direct') {
-            my $meth = $by_index->{method_id_item}[$data->{c}];
+            my $meth = $by_index->{method_id_item}[$c];
             my $meth_name = $meth->{name};
 
             if ($meth_name eq '<init>') {
@@ -459,7 +459,7 @@ for my $infn (@ARGV) {
             }
 
             # This is decidedly confusing...
-            my @args = (@{$data}{qw<d e f g a>})[2..$data->{b}];
+            my @args = (@{$data}{qw<d e f g a>})[2..$b];
 
             print "    $meth_name(", join(", ", @args), ");\n";
           }
@@ -469,7 +469,7 @@ for my $infn (@ARGV) {
             my $object = $data->{d};
             my $arg_count = $data->{b}-1;
 
-            my @args = (@{$data}{qw<e f g>})[0..$arg_count-1];
+            my @args = (@{$data}{qw<e f g a>})[0..$arg_count-1];
             my $args = join ", ", @args;
 
             my $opname = $op_info->[1];
@@ -506,6 +506,12 @@ for my $infn (@ARGV) {
   }
 
   $by_index = {};
+}
+
+sub reg_name {
+  my ($n, $current_debug) = @_;
+
+  $current_debug->{registers}[$n]{name} || ('v'.$n);
 }
 
 sub binary_name_to_pretty {
