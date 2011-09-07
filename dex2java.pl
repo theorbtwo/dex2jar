@@ -400,6 +400,11 @@ for my $infn (@ARGV) {
             print "    return $a; // object\n";
           }
 
+          when ('const-class') {
+            my $type = binary_name_to_pretty($by_index->{type_id_item}[$b]);
+            print "    $a = $type.class\n";
+          }
+
           when ('check-cast') {
             # 1f
             my $type = binary_name_to_pretty($by_index->{type_id_item}[$b]);
