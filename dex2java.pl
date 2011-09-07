@@ -181,8 +181,11 @@ for my $infn (@ARGV) {
 
                               0x10 => ['11x', 'return-wide'],
                               0x11 => ['11x', 'return-object'],
-                              0x12 => ['11n', 'const/4 vA, #+B'],
+                              0x12 => ['11n', 'const'],
                               0x1a => ['21c', 'const-string'],
+                              0x1c => ['21c', 'const-class'],
+                              0x1d => ['11x', 'monitor-enter'],
+                              0x1e => ['11x', 'monitor-exit'],
                               0x1f => ['21c', 'check-cast'],
                               0x20 => ['22c', 'instance-of'],
 
@@ -282,101 +285,96 @@ for my $infn (@ARGV) {
 
         my $data;
 
-        # http://android.git.kernel.org/?p=platform/dalvik.git;a=blob_plain;f=docs/instruction-formats.html;hb=refs/heads/master
-        given ($op_info->[0]) {
-          when ('10t') {
-            # AA|op -- op +AA
-            $data->{a} = 'loc_'.($address + unpack 'c', pack 'C', $opcode>>8);
-          }
-
-          when ('10x') {
-            # nop.
-          }
-
-          when ('11n') {
-            # B|A|op -- op vA, #+B
-            $data->{a} = reg_name(($opcode >> 8)&0xF, $current_debug);
-            $data->{b} = $opcode >> 12;
-          }
-
-          when ('11x') {
-            $data->{a} = reg_name($opcode >> 8, $current_debug);
-          }
-
-          when ('12x') {
-            # B|A|op -- op vA, vB
-            $data->{a} = reg_name(($opcode >> 8)&0xF, $current_debug);
-            $data->{b} = reg_name($opcode >> 12, $current_debug);
-          }
-
-          when ('20t') {
-            # ØØ|op AAAA -- op +AAAA
-            $data->{a} = 'loc_'.($address+unpack 's', pack 'S', shift(@insns));
-          }
-          when ('21c') {
-            # AA|op BBBB -- op vAA, xxxx@BBBB
-            $data->{a} = reg_name($opcode >> 8, $current_debug);
-            $data->{b} = shift @insns;
-          }
-          when('21t') {
-            # AA|op BBBB -- op vAA, +BBBB
-            $data->{a} = reg_name($opcode >> 8, $current_debug);
-            $data->{b} = 'loc_'.($address+unpack 's', pack 'S', shift(@insns));
-          }
-          when ('22b') {
-            # AA|op CC|BB -- op vAA, vBB, #+CC
-            $data->{a} = reg_name($opcode >> 8, $current_debug);
-            my $next = shift @insns;
-            $data->{c} = $next >> 8;
-            $data->{b} = reg_name($next & 0xFF, $current_debug);
-          }
-          when ('22c') {
-            # B|A|op CCCC-- op vA, vB, kind@CCCC
-            $data->{b} = reg_name($opcode >> 12, $current_debug);
-            $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
-            $data->{c} = shift @insns;
-          }
-          when ('22t') {
-            # B|A|op CCCC - op vA, vB, +CCCC
-            $data->{b} = reg_name($opcode >> 12, $current_debug);
-            $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
-            $data->{c} = 'loc_'.($address+(unpack 's', pack 'S', shift(@insns)));
-          }
-          when ('22x') {
-            # AA|op BBBB - op vAA, vBBBB
-            $data->{a} = reg_name($opcode >> 8, $current_debug);
-            $data->{b} = reg_name(shift @insns, $current_debug);
-          }
-          when ('23x') {
-            # AA|op CC|BB - op vAA, vBB, vCC
-            $data->{a} = reg_name($opcode >> 8, $current_debug);
-            my $next = shift @insns;
-            $data->{c} = reg_name($next >> 8, $current_debug);
-            $data->{b} = reg_name($next & 0xFF, $current_debug);
-          }
-
-          when ('31t') {
-            # AA|op BBBBlo BBBBhi -- op vAA, +BBBBBBBB
-            # However, this is only used for the special instructions
-            #  -- packed-switch, sparse-switch, fill-array-data
-            $data->{a} = reg_name($opcode >> 8, $current_debug);
-            $data->{b} = (shift @insns) | ((shift @insns) >> 16);
-          }
-
-          when ('35c') {
-            # B|A|op CCCC G|F|E|D -- op {vD, vE, vF, vG, vA}, kind@CCCC
-            $data->{b} = $opcode >> (8+4);
-            $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
-            $data->{c} = shift @insns;
-            my $gfed = shift @insns;
-            $data->{g} = reg_name(($gfed >> 12) & 0xF, $current_debug);
-            $data->{f} = reg_name(($gfed >>  8) & 0xF, $current_debug);
-            $data->{e} = reg_name(($gfed >>  4) & 0xF, $current_debug);
-            $data->{d} = reg_name(($gfed >>  0) & 0xF, $current_debug);
-          }
-          default {
-            die "Unknown opcode format $_";
-          }
+        # http://source.android.com/tech/dalvik/instruction-formats.html
+        my $formats = {
+                          '10t' => sub {
+                            # AA|op -- op +AA
+                            $data->{a} = 'loc_'.($address + unpack 'c', pack 'C', $opcode>>8);
+                          },
+                          '10x' => sub {
+                            # nop.
+                          },
+                          '11n' => sub {
+                            # B|A|op -- op vA, #+B
+                            $data->{a} = reg_name(($opcode >> 8)&0xF, $current_debug);
+                            $data->{b} = $opcode >> 12;
+                          },
+                          '11x' => sub {
+                            $data->{a} = reg_name($opcode >> 8, $current_debug);
+                          },
+                          '12x' => sub {
+                            # B|A|op -- op vA, vB
+                            $data->{a} = reg_name(($opcode >> 8)&0xF, $current_debug);
+                            $data->{b} = reg_name($opcode >> 12, $current_debug);
+                          },
+                          '20t' => sub {
+                            # ØØ|op AAAA -- op +AAAA
+                            $data->{a} = 'loc_'.($address+unpack 's', pack 'S', shift(@insns));
+                          },
+                          '21c' => sub {
+                            # AA|op BBBB -- op vAA, xxxx@BBBB
+                            $data->{a} = reg_name($opcode >> 8, $current_debug);
+                            $data->{b} = shift @insns;
+                          },
+                          '21t' => sub {
+                            # AA|op BBBB -- op vAA, +BBBB
+                            $data->{a} = reg_name($opcode >> 8, $current_debug);
+                            $data->{b} = 'loc_'.($address+unpack 's', pack 'S', shift(@insns));
+                          },
+                          '22b' => sub {
+                            # AA|op CC|BB -- op vAA, vBB, #+CC
+                            $data->{a} = reg_name($opcode >> 8, $current_debug);
+                            my $next = shift @insns;
+                            $data->{c} = $next >> 8;
+                            $data->{b} = reg_name($next & 0xFF, $current_debug);
+                          },
+                          '22c' => sub {
+                            # B|A|op CCCC-- op vA, vB, kind@CCCC
+                            $data->{b} = reg_name($opcode >> 12, $current_debug);
+                            $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
+                            $data->{c} = shift @insns;
+                          },
+                          '22t' => sub {
+                            # B|A|op CCCC - op vA, vB, +CCCC
+                            $data->{b} = reg_name($opcode >> 12, $current_debug);
+                            $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
+                            $data->{c} = 'loc_'.($address+(unpack 's', pack 'S', shift(@insns)));
+                          },
+                          '22x' => sub {
+                            # AA|op BBBB - op vAA, vBBBB
+                            $data->{a} = reg_name($opcode >> 8, $current_debug);
+                            $data->{b} = reg_name(shift @insns, $current_debug);
+                          },
+                          '23x' => sub {
+                            # AA|op CC|BB - op vAA, vBB, vCC
+                            $data->{a} = reg_name($opcode >> 8, $current_debug);
+                            my $next = shift @insns;
+                            $data->{c} = reg_name($next >> 8, $current_debug);
+                            $data->{b} = reg_name($next & 0xFF, $current_debug);
+                          },
+                          '31t' => sub {
+                            # AA|op BBBBlo BBBBhi -- op vAA, +BBBBBBBB
+                            # However, this is only used for the special instructions
+                            #  -- packed-switch, sparse-switch, fill-array-data
+                            $data->{a} = reg_name($opcode >> 8, $current_debug);
+                            $data->{b} = (shift @insns) | ((shift @insns) >> 16);
+                          },
+                          '35c' => sub {
+                            # B|A|op CCCC G|F|E|D -- op {vD, vE, vF, vG, vA}, kind@CCCC
+                            $data->{b} = $opcode >> (8+4);
+                            $data->{a} = reg_name(($opcode >> 8) & 0xF, $current_debug);
+                            $data->{c} = shift @insns;
+                            my $gfed = shift @insns;
+                            $data->{g} = reg_name(($gfed >> 12) & 0xF, $current_debug);
+                            $data->{f} = reg_name(($gfed >>  8) & 0xF, $current_debug);
+                            $data->{e} = reg_name(($gfed >>  4) & 0xF, $current_debug);
+                            $data->{d} = reg_name(($gfed >>  0) & 0xF, $current_debug);
+                          },
+                         };
+        if (exists $formats->{$op_info->[0]}) {
+          $formats->{$op_info->[0]}->();
+        } else {
+          die "Unknown opcode format ".$op_info->[0];
         }
 
 
@@ -503,7 +501,7 @@ for my $infn (@ARGV) {
           when ('move-exception') {
             print "   $a = caught;\n";
           }
-          when ('const/4 vA, #+B') {
+          when ('const') {
             my $reg = $data->{a};
             my $val = $data->{b};
             print "    $reg = $val;\n";
