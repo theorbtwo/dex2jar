@@ -165,6 +165,7 @@ for my $infn (@ARGV) {
         # http://android.git.kernel.org/?p=platform/dalvik.git;a=blob_plain;f=docs/dalvik-bytecode.html;hb=refs/heads/master
 
         state $all_op_info = {
+                              0x07 => ['12x', 'move-object'],
                               0x0a => ['11x', 'move-result'],
                               0x0c => ['11x', 'move-result-object'],
                               0x0d => ['11x', 'move-exception'],
@@ -353,6 +354,10 @@ for my $infn (@ARGV) {
 
         my ($a, $b, $c) = @{$data}{qw<a b c>};
         given ($op_info->[1]) {
+          when ('move-object') {
+            # 7
+            print "  $a = $b; // objects\n";
+          }
           when ('iget-object') {
             my $field = $by_index->{field_id_item}[$c]->{name};
             print "   $a = $b.$field; // object field\n";
