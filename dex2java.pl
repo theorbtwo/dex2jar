@@ -167,11 +167,14 @@ for my $infn (@ARGV) {
         state $all_op_info = {
                               0x07 => ['12x', 'move-object'],
                               0x0a => ['11x', 'move-result'],
+                              0x0b => ['11x', 'move-result-wide'],
                               0x0c => ['11x', 'move-result-object'],
                               0x0d => ['11x', 'move-exception'],
                               0x0e => ['10x', 'return-void'],
                               0x0f => ['11x', 'return'],
 
+                              0x10 => ['11x', 'return-wide'],
+                              0x11 => ['11x', 'return-object'],
                               0x12 => ['11n', 'const/4 vA, #+B'],
                               0x1a => ['21c', 'const-string'],
 
@@ -370,6 +373,11 @@ for my $infn (@ARGV) {
           when ('move-object') {
             # 7
             print "  $a = $b; // objects\n";
+          }
+
+          when ('return-object') {
+            # 11
+            print "    return $a; // object\n";
           }
 
           when ('throw') {
