@@ -8,7 +8,12 @@ use Scalar::Util 'looks_like_number';
 use 5.10.0;
 $|=1;
 
+$Binary::DEBUG = 0;
+
 # http://source.android.com/tech/dalvik/dex-format.html
+
+# NetworkLocation.apk.unpack/classes.dex - .8.thing.15.debug_info.line_start.leb128
+
 
 my $by_index = {};
 my $by_offset = {};
@@ -192,6 +197,8 @@ for my $infn (@ARGV) {
                               0x21 => ['12x', 'array-length'],
                               0x22 => ['21c', 'new-instance'],
                               0x23 => ['22c', 'new-array'],
+                              0x24 => ['35c', 'filled-new-array'],
+                              0x25 => ['3rc', 'filled-new-array/range'],
 
                               0x27 => ['11x', 'throw'],
                               0x28 => ['10t', 'goto'],
@@ -370,7 +377,14 @@ for my $infn (@ARGV) {
                             $data->{e} = reg_name(($gfed >>  4) & 0xF, $current_debug);
                             $data->{d} = reg_name(($gfed >>  0) & 0xF, $current_debug);
                           },
-                         };
+                       '3rc' => sub {
+                         # AA|op BBBB CCCC -> op {vCCCC .. vNNNN}, kind@BBBB
+                         # (where kind is meth or type).
+                         $data->{a} = $opcode >> 8;
+                         $data->{b} = shift @insns;
+                         $data->{c} = shift @insns;
+                       }
+                      };
         if (exists $formats->{$op_info->[0]}) {
           $formats->{$op_info->[0]}->();
         } else {
@@ -410,6 +424,15 @@ for my $infn (@ARGV) {
             my $type = binary_name_to_pretty($by_index->{type_id_item}[$b]);
 
             print "    check-cast $a, $type;\n";
+          }
+
+          when ('filled-new-array/range') {
+            # 25
+            print "a=$a, b=$b, c=$c\n";
+            my $type = binary_name_to_pretty($by_index->{type_id_item}[$b]);
+            $type =~ s/\[\]$/[$a]/;
+            my $values = join ', ', map {reg_name($_, $current_debug)} $c .. $a+$c-1;
+            print "    res = new $type([$values]); // filled-new-array/range\n";
           }
 
           when ('throw') {
@@ -678,6 +701,10 @@ sub eat_map_item {
                                          return;
                                        }
                                        for my $i (0..$context->{size}-1) {
+                                         if ($i == 13 and $context->{type} eq 'code_item') {
+                                           $Binary::DEBUG = 1;
+                                         }
+
                                          my $e = $eater->([$fh, $context, $address.'.'.$i]);
                                          if (ref $e eq 'HASH') {
                                            delete $e->{_context};
@@ -911,8 +938,12 @@ sub eat_encoded_method {
                     method_idx_diff => \&uleb128,
                     access_flags => sub {Binary::eat_bitmask(shift, \&uleb128, @access_flags)},
                     code => sub {
+                      my ($conv) = @_;
+                      my $loc = uleb128([$conv->[0], $conv->[1], $conv->[2].".loc"]);
+                      # native or abstract method, no body.
+                      return undef if !$loc;
                       Binary::eat_at(shift,
-                                     \&uleb128,
+                                     $loc,
                                      \&eat_code_item);
                     }
                    ]);
@@ -944,7 +975,9 @@ sub eat_code_item {
                     # in *items*
                     tries_size => \&ushort,
                     debug_info => sub {
-                      Binary::eat_at(shift, \&uint, \&eat_debug_info_item);
+                      my $loc = uint($_[0]);
+                      return undef if !$loc;
+                      Binary::eat_at(shift, $loc, \&eat_debug_info_item);
                     },
 
                     insns => sub {
@@ -974,7 +1007,6 @@ sub eat_code_item {
 
                     handlers => sub {
                       my ($fh, $context) = @{$_[0]};
-                      #local $Binary::DEBUG=1;
 
                       return unless $context->{tries_size};
 
@@ -1106,7 +1138,7 @@ sub eat_encoded_catch_handler {
                     },
                     catch_all_handler => sub {
                       if ($_[0][1]{size} < 1) {
-                        return eat_encoded_type_addr_pair($_[0]);
+                        return uleb128($_[0]);
                       } else {
                         return undef;
                       }
