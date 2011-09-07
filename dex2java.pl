@@ -179,6 +179,7 @@ for my $infn (@ARGV) {
                               0x22 => ['21c', 'new-instance'],
                               0x23 => ['22c', 'new-array'],
 
+                              0x27 => ['11x', 'throw'],
                               0x28 => ['10t', 'goto'],
                               0x29 => ['20t', 'goto'],
 
@@ -369,6 +370,11 @@ for my $infn (@ARGV) {
           when ('move-object') {
             # 7
             print "  $a = $b; // objects\n";
+          }
+
+          when ('throw') {
+            # 27
+            print "   throw $a;\n";
           }
 
           when ('packed-switch') {
